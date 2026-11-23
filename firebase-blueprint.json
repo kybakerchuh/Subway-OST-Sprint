@@ -1,0 +1,174 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private player profile storing Algebra 1 OST runner progression, mission multiplier level, currency, unlocked boards, and per-topic accuracy counts.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the player.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name shown in-game.",
+          "maxLength": 60
+        },
+        "highScore": {
+          "type": "number",
+          "description": "Highest single-run score."
+        },
+        "totalCoins": {
+          "type": "number",
+          "description": "Total spendable OST coins accumulated."
+        },
+        "totalRuns": {
+          "type": "number",
+          "description": "Total number of completed runs."
+        },
+        "totalCorrectOst": {
+          "type": "number",
+          "description": "Cumulative correctly answered OST questions."
+        },
+        "totalAnsweredOst": {
+          "type": "number",
+          "description": "Cumulative answered OST questions."
+        },
+        "multiplierLevel": {
+          "type": "number",
+          "description": "Subway Surfers mission multiplier level (1x to 30x)."
+        },
+        "ostWordsCompleted": {
+          "type": "number",
+          "description": "Total O-S-T word hunts completed."
+        },
+        "missionProgress": {
+          "type": "array",
+          "description": "Current 3 mission counters for the active multiplier level."
+        },
+        "weeklyChallenge": {
+          "type": "object",
+          "description": "Active weekly challenge state (weekId, challengeId, progress, completed, completedCount)."
+        },
+        "selectedTopic": {
+          "type": "string",
+          "description": "Last selected OST Playbook topic ID.",
+          "maxLength": 48
+        },
+        "selectedBoard": {
+          "type": "string",
+          "description": "Active hoverboard skin ID.",
+          "maxLength": 32
+        },
+        "unlockedBoards": {
+          "type": "array",
+          "description": "List of unlocked hoverboard IDs (up to 16)."
+        },
+        "topicCorrectCounts": {
+          "type": "object",
+          "description": "Map of topic ID to number of correct answers."
+        },
+        "topicAnsweredCounts": {
+          "type": "object",
+          "description": "Map of topic ID to total answered questions."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "highScore",
+        "totalCoins",
+        "totalRuns",
+        "totalCorrectOst",
+        "totalAnsweredOst",
+        "selectedTopic",
+        "selectedBoard",
+        "unlockedBoards",
+        "topicCorrectCounts",
+        "topicAnsweredCounts",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LeaderboardEntry": {
+      "title": "LeaderboardEntry",
+      "description": "Public non-PII leaderboard entry for high score and OST question mastery rankings.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Player UID.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Public display name.",
+          "maxLength": 60
+        },
+        "highScore": {
+          "type": "number",
+          "description": "Best run score."
+        },
+        "totalCorrectOst": {
+          "type": "number",
+          "description": "Total correctly answered OST questions."
+        },
+        "totalAnsweredOst": {
+          "type": "number",
+          "description": "Total OST questions answered."
+        },
+        "bestCoins": {
+          "type": "number",
+          "description": "Most coins collected in a single run."
+        },
+        "favoriteTopic": {
+          "type": "string",
+          "description": "Current or favorite OST topic.",
+          "maxLength": 48
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest update."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "highScore",
+        "totalCorrectOst",
+        "totalAnsweredOst",
+        "bestCoins",
+        "favoriteTopic",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Private user progression, mission multiplier level, and OST topic mastery stats."
+    },
+    "/leaderboard/{userId}": {
+      "schema": {
+        "$ref": "#/entities/LeaderboardEntry"
+      },
+      "description": "Public leaderboard entries ranked by high score and correct OST questions."
+    }
+  }
+}

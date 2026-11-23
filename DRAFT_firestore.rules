@@ -1,0 +1,223 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isNonNegInt(val, maxVal) {
+      return val is int && val >= 0 && val <= maxVal;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+        'uid',
+        'displayName',
+        'highScore',
+        'totalCoins',
+        'totalRuns',
+        'totalCorrectOst',
+        'totalAnsweredOst',
+        'selectedTopic',
+        'selectedBoard',
+        'unlockedBoards',
+        'topicCorrectCounts',
+        'topicAnsweredCounts',
+        'createdAt',
+        'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'uid',
+        'displayName',
+        'highScore',
+        'totalCoins',
+        'totalRuns',
+        'totalCorrectOst',
+        'totalAnsweredOst',
+        'multiplierLevel',
+        'ostWordsCompleted',
+        'missionProgress',
+        'weeklyChallenge',
+        'selectedTopic',
+        'selectedBoard',
+        'unlockedBoards',
+        'topicCorrectCounts',
+        'topicAnsweredCounts',
+        'createdAt',
+        'updatedAt'
+      ])
+      && data.uid is string
+      && data.uid == userId
+      && isValidId(data.uid)
+      && data.displayName is string
+      && data.displayName.size() >= 1
+      && data.displayName.size() <= 60
+      && isNonNegInt(data.highScore, 100000000)
+      && isNonNegInt(data.totalCoins, 100000000)
+      && isNonNegInt(data.totalRuns, 1000000)
+      && isNonNegInt(data.totalCorrectOst, 1000000)
+      && isNonNegInt(data.totalAnsweredOst, 1000000)
+      && data.totalCorrectOst <= data.totalAnsweredOst
+      && (!('multiplierLevel' in data) || (data.multiplierLevel is int && data.multiplierLevel >= 1 && data.multiplierLevel <= 30))
+      && (!('ostWordsCompleted' in data) || isNonNegInt(data.ostWordsCompleted, 1000000))
+      && (!('missionProgress' in data) || (data.missionProgress is list && data.missionProgress.size() == 3 && data.missionProgress[0] is int && data.missionProgress[0] >= 0))
+      && (!('weeklyChallenge' in data) || (
+        data.weeklyChallenge is map
+        && data.weeklyChallenge.keys().hasAll(['weekId', 'challengeId', 'progress', 'completed', 'completedCount'])
+        && data.weeklyChallenge.keys().hasOnly(['weekId', 'challengeId', 'progress', 'completed', 'completedCount'])
+        && data.weeklyChallenge.weekId is string
+        && data.weeklyChallenge.weekId.size() >= 1
+        && data.weeklyChallenge.weekId.size() <= 16
+        && data.weeklyChallenge.challengeId is string
+        && data.weeklyChallenge.challengeId.size() >= 1
+        && data.weeklyChallenge.challengeId.size() <= 32
+        && isNonNegInt(data.weeklyChallenge.progress, 1000000)
+        && data.weeklyChallenge.completed is bool
+        && isNonNegInt(data.weeklyChallenge.completedCount, 10000)
+      ))
+      && data.selectedTopic is string
+      && data.selectedTopic.size() >= 1
+      && data.selectedTopic.size() <= 48
+      && data.selectedBoard is string
+      && data.selectedBoard.size() >= 1
+      && data.selectedBoard.size() <= 32
+      && data.unlockedBoards is list
+      && data.unlockedBoards.size() >= 1
+      && data.unlockedBoards.size() <= 16
+      && data.unlockedBoards[0] is string
+      && data.topicCorrectCounts is map
+      && data.topicCorrectCounts.size() <= 15
+      && data.topicAnsweredCounts is map
+      && data.topicAnsweredCounts.size() <= 15
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidLeaderboardEntry(data, userId) {
+      return data.keys().hasAll([
+        'uid',
+        'displayName',
+        'highScore',
+        'totalCorrectOst',
+        'totalAnsweredOst',
+        'bestCoins',
+        'favoriteTopic',
+        'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'uid',
+        'displayName',
+        'highScore',
+        'totalCorrectOst',
+        'totalAnsweredOst',
+        'bestCoins',
+        'favoriteTopic',
+        'updatedAt'
+      ])
+      && data.uid is string
+      && data.uid == userId
+      && isValidId(data.uid)
+      && data.displayName is string
+      && data.displayName.size() >= 1
+      && data.displayName.size() <= 60
+      && isNonNegInt(data.highScore, 100000000)
+      && isNonNegInt(data.totalCorrectOst, 1000000)
+      && isNonNegInt(data.totalAnsweredOst, 1000000)
+      && data.totalCorrectOst <= data.totalAnsweredOst
+      && isNonNegInt(data.bestCoins, 10000000)
+      && data.favoriteTopic is string
+      && data.favoriteTopic.size() >= 1
+      && data.favoriteTopic.size() <= 48
+      && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isEmailVerified()
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isEmailVerified()
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName',
+          'highScore',
+          'totalCoins',
+          'totalRuns',
+          'totalCorrectOst',
+          'totalAnsweredOst',
+          'multiplierLevel',
+          'ostWordsCompleted',
+          'missionProgress',
+          'weeklyChallenge',
+          'selectedTopic',
+          'selectedBoard',
+          'unlockedBoards',
+          'topicCorrectCounts',
+          'topicAnsweredCounts',
+          'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    match /leaderboard/{userId} {
+      allow get: if isValidId(userId) && existing().highScore >= 0;
+      allow list: if existing().highScore >= 0 || existing().totalCorrectOst >= 0;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isEmailVerified()
+        && isValidLeaderboardEntry(incoming(), userId)
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isEmailVerified()
+        && isValidLeaderboardEntry(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName',
+          'highScore',
+          'totalCorrectOst',
+          'totalAnsweredOst',
+          'bestCoins',
+          'favoriteTopic',
+          'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+  }
+}

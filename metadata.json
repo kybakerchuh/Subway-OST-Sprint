@@ -1,0 +1,6 @@
+{
+  "name": "Subway OST Sprint",
+  "description": "3D endless subway runner powered by Algebra 1 OST Playbook questions, topic mastery tracking, Google Sign-In progress sync, and global leaderboards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
