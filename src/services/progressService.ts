@@ -505,7 +505,7 @@ export async function fetchLeaderboard(
       collection(db, path),
       where(sortBy, '>=', 0),
       orderBy(sortBy, 'desc'),
-      limit(25),
+      limit(10),
     );
     const snapshot = await getDocs(q);
     return snapshot.docs.map((d) => {

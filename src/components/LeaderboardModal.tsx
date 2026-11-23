@@ -1,4 +1,4 @@
-import { Award, RefreshCw, Trophy, X } from 'lucide-react';
+import { Award, Medal, RefreshCw, Trophy, X } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import { getTopicById } from '../data/topics';
 import { fetchLeaderboard } from '../services/progressService';
@@ -45,7 +45,7 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
         <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-slate-800 shrink-0">
           <div>
             <h2 className="font-display text-lg sm:text-xl font-bold text-white">
-              Global Leaderboard
+              Global Top 10 Leaderboard
             </h2>
             <p className="text-xs sm:text-sm text-slate-400">
               Sign in with Google to post your High Score and OST Mastery
@@ -122,13 +122,14 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
             </div>
           ) : (
             <div className="divide-y divide-slate-800/80">
-              {entries.map((entry, idx) => {
+              {entries.slice(0, 10).map((entry, idx) => {
                 const isMe = currentUid && entry.uid === currentUid;
                 const accuracy =
                   entry.totalAnsweredOst > 0
                     ? Math.round((entry.totalCorrectOst / entry.totalAnsweredOst) * 100)
                     : 0;
                 const topicTitle = getTopicById(entry.favoriteTopic).shortTitle;
+                const hasMedal = idx < 3;
 
                 return (
                   <div
@@ -139,17 +140,28 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <div
-                        className={`w-8 h-8 rounded-lg font-mono-num text-sm font-bold flex items-center justify-center shrink-0 ${
+                        className={`w-12 h-8 rounded-lg font-mono-num text-sm font-bold flex items-center justify-center gap-1 shrink-0 ${
                           idx === 0
                             ? 'bg-amber-400 text-slate-950'
                             : idx === 1
-                              ? 'bg-slate-300 text-slate-950'
+                              ? 'bg-slate-200 text-slate-950'
                               : idx === 2
-                                ? 'bg-amber-700 text-white'
+                                ? 'bg-amber-700 text-amber-100'
                                 : 'bg-slate-800 text-slate-300'
                         }`}
                       >
-                        {idx + 1}
+                        <span>{idx + 1}</span>
+                        {hasMedal && (
+                          <Medal
+                            className={`w-3.5 h-3.5 shrink-0 ${
+                              idx === 0
+                                ? 'text-amber-900'
+                                : idx === 1
+                                  ? 'text-slate-700'
+                                  : 'text-amber-200'
+                            }`}
+                          />
+                        )}
                       </div>
                       <div className="min-w-0">
                         <div className="font-semibold text-sm text-white truncate">
