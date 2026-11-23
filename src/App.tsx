@@ -38,6 +38,7 @@ import { auth, googleProvider } from './firebase';
 import { SubwayRunnerEngine } from './game/SubwayRunnerEngine';
 import {
   DEFAULT_PROGRESS,
+  extractFirstName,
   loadLocalProgress,
   sanitizeBoards,
   saveCloudProgress,
@@ -282,11 +283,19 @@ function AppContent() {
 
   const persistProgress = useCallback(
     (next: UserProgress, runScore = 0, runCoins = 0, syncCloud = true) => {
-      progressRef.current = next;
-      setProgress(next);
-      saveLocalProgress(next);
-      if (syncCloud && next.uid) {
-        void saveCloudProgress(next, runScore, runCoins, true).catch((err) => {
+      const activeUser = auth.currentUser;
+      const normalized: UserProgress = activeUser
+        ? {
+            ...next,
+            uid: activeUser.uid,
+            displayName: extractFirstName(activeUser.displayName, activeUser.email),
+          }
+        : next;
+      progressRef.current = normalized;
+      setProgress(normalized);
+      saveLocalProgress(normalized);
+      if (syncCloud && normalized.uid) {
+        void saveCloudProgress(normalized, runScore, runCoins, true).catch((err) => {
           console.error('Cloud save error:', err);
         });
       }
@@ -299,16 +308,47 @@ function AppContent() {
     const unsub = onAuthStateChanged(auth, (user) => {
       setAuthUser(user);
       if (user) {
-        void syncUserOnSignIn(user, progressRef.current)
+        setAuthError(null);
+        const firstName = extractFirstName(user.displayName, user.email);
+        const sameAccount = !progressRef.current.uid || progressRef.current.uid === user.uid;
+        const baseLocal: UserProgress = sameAccount
+          ? progressRef.current
+          : { ...DEFAULT_PROGRESS, weeklyChallenge: createFreshWeeklyChallenge() };
+        const immediate: UserProgress = {
+          ...baseLocal,
+          uid: user.uid,
+          displayName: firstName,
+        };
+        progressRef.current = immediate;
+        setProgress(immediate);
+        saveLocalProgress(immediate);
+
+        void syncUserOnSignIn(user, immediate)
           .then((merged) => {
-            progressRef.current = merged;
-            setProgress(merged);
-            saveLocalProgress(merged);
-            engineRef.current?.setBoardSkin(merged.selectedBoard);
-            engineRef.current?.setBaseMultiplier(merged.multiplierLevel);
+            const live = progressRef.current;
+            const liveCorrect = Math.max(merged.totalCorrectOst, live.totalCorrectOst);
+            const liveAnswered = Math.max(liveCorrect, merged.totalAnsweredOst, live.totalAnsweredOst);
+            const reconciled: UserProgress = {
+              ...merged,
+              uid: user.uid,
+              displayName: firstName,
+              highScore: Math.max(merged.highScore, live.highScore),
+              totalCoins: Math.max(merged.totalCoins, live.totalCoins),
+              totalRuns: Math.max(merged.totalRuns, live.totalRuns),
+              totalCorrectOst: liveCorrect,
+              totalAnsweredOst: liveAnswered,
+              multiplierLevel: Math.max(merged.multiplierLevel, live.multiplierLevel),
+              ostWordsCompleted: Math.max(merged.ostWordsCompleted, live.ostWordsCompleted),
+            };
+            progressRef.current = reconciled;
+            setProgress(reconciled);
+            saveLocalProgress(reconciled);
+            engineRef.current?.setBoardSkin(reconciled.selectedBoard);
+            engineRef.current?.setBaseMultiplier(reconciled.multiplierLevel);
           })
           .catch((err) => {
             console.error('Sign-in sync error:', err);
+            setAuthError('Signed in, but cloud leaderboard sync hit a snag. Progress saved locally.');
           });
       }
     });
@@ -483,6 +523,7 @@ function AppContent() {
     };
     progressRef.current = guest;
     setProgress(guest);
+    saveLocalProgress(guest);
     engineRef.current?.setBaseMultiplier(1);
     engineRef.current?.setBoardSkin('metro-amber');
   };
@@ -693,7 +734,7 @@ function AppContent() {
 
   const handleQuitToMenu = () => {
     const snap = engineRef.current?.getSnapshot() ?? hud;
-    if (snap.score > 0 || snap.coins > 0) {
+    if (snap.score > 0 || snap.coins > 0 || runAnsweredCount > 0) {
       const prev = progressRef.current;
       const finalScore = snap.score + bonusScore;
       const totalRunCoins = snap.coins + bonusCoins;
@@ -713,6 +754,9 @@ function AppContent() {
     setPhase('menu');
   };
 
+  const activeDisplayName = authUser
+    ? extractFirstName(authUser.displayName, authUser.email)
+    : progress.displayName;
   const currentTopic = getTopicById(progress.selectedTopic);
   const weeklyDef = getWeeklyChallengeById(progress.weeklyChallenge.challengeId);
   const weeklyCurrent = Math.min(weeklyDef.target, progress.weeklyChallenge.progress);
@@ -874,51 +918,61 @@ function AppContent() {
       {phase === 'menu' && (
         <div className="fixed inset-0 z-20 flex flex-col justify-between p-3 sm:p-6 pointer-events-none">
           {/* Top Bar */}
-          <header className="w-full max-w-6xl mx-auto flex items-center justify-between gap-4 bg-slate-950/85 border border-white/15 rounded-2xl px-4 py-2.5 pointer-events-auto">
-            <div className="font-display text-lg sm:text-xl font-extrabold tracking-tight text-white whitespace-nowrap shrink-0">
-              Subway OST Sprint
+          <header className="w-full max-w-6xl mx-auto bg-slate-950/85 border border-white/15 rounded-2xl px-4 py-2.5 pointer-events-auto space-y-2">
+            <div className="flex items-center justify-between gap-4">
+              <div className="font-display text-lg sm:text-xl font-extrabold tracking-tight text-white whitespace-nowrap shrink-0">
+                Subway OST Sprint
+              </div>
+
+              <div className="hidden md:flex items-center gap-4 text-xs font-mono-num text-slate-300 whitespace-nowrap">
+                <span className="text-amber-400 font-bold">Mult {progress.multiplierLevel}x</span>
+                <span aria-hidden="true">·</span>
+                <span>Best {progress.highScore.toLocaleString()}</span>
+                <span aria-hidden="true">·</span>
+                <span>{progress.totalCorrectOst} OST Correct</span>
+                <span aria-hidden="true">·</span>
+                <span className="text-amber-300">{progress.totalCoins.toLocaleString()} Coins</span>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={toggleMute}
+                  aria-label={muted ? 'Unmute audio' : 'Mute audio'}
+                  className="min-w-[44px] min-h-[44px] rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 flex items-center justify-center transition-colors"
+                >
+                  {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                </button>
+
+                {authUser ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleSignOut()}
+                    aria-label="Sign out of Google account"
+                    className="min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <span className="max-w-[110px] truncate">{activeDisplayName}</span>
+                    <LogOut className="w-3.5 h-3.5 text-slate-400" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={authLoading}
+                    onClick={() => void handleGoogleSignIn()}
+                    className="min-h-[44px] px-4 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-950 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    <span>{authLoading ? 'Signing in...' : 'Sign in with Google'}</span>
+                  </button>
+                )}
+              </div>
             </div>
 
-            <div className="hidden md:flex items-center gap-4 text-xs font-mono-num text-slate-300 whitespace-nowrap">
-              <span className="text-amber-400 font-bold">Mult {progress.multiplierLevel}x</span>
-              <span aria-hidden="true">·</span>
+            <div className="flex md:hidden items-center justify-between gap-2 text-[11px] font-mono-num text-slate-300 border-t border-white/10 pt-1.5">
+              <span className="text-amber-400 font-bold">{progress.multiplierLevel}x</span>
               <span>Best {progress.highScore.toLocaleString()}</span>
-              <span aria-hidden="true">·</span>
-              <span>{progress.totalCorrectOst} OST Correct</span>
-              <span aria-hidden="true">·</span>
+              <span>{progress.totalCorrectOst} OST</span>
               <span className="text-amber-300">{progress.totalCoins.toLocaleString()} Coins</span>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={toggleMute}
-                aria-label={muted ? 'Unmute audio' : 'Mute audio'}
-                className="min-w-[44px] min-h-[44px] rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 flex items-center justify-center transition-colors"
-              >
-                {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-              </button>
-
-              {authUser ? (
-                <button
-                  type="button"
-                  onClick={() => void handleSignOut()}
-                  className="min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
-                >
-                  <span className="max-w-[110px] truncate">{progress.displayName}</span>
-                  <LogOut className="w-3.5 h-3.5 text-slate-400" />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  disabled={authLoading}
-                  onClick={() => void handleGoogleSignIn()}
-                  className="min-h-[44px] px-4 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-950 text-xs sm:text-sm font-bold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
-                >
-                  <LogIn className="w-4 h-4" />
-                  <span>{authLoading ? 'Signing in...' : 'Sign in with Google'}</span>
-                </button>
-              )}
             </div>
           </header>
 
@@ -1055,7 +1109,7 @@ function AppContent() {
           <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 space-y-4 text-center">
             <h2 className="font-display text-2xl font-bold text-white">Run Paused</h2>
             <p className="text-xs text-slate-400">
-              Multiplier {progress.multiplierLevel}x · Topic: {currentTopic.shortTitle}
+              {activeDisplayName} · Multiplier {progress.multiplierLevel}x · {currentTopic.shortTitle}
             </p>
             <div className="space-y-2.5 pt-2">
               <button
@@ -1102,7 +1156,9 @@ function AppContent() {
               )}
               <h2 className="font-display text-2xl font-extrabold text-white">Run Complete</h2>
               <p className="text-xs text-slate-400">
-                {authUser ? 'Saved to your Google profile & leaderboard' : 'Sign in with Google to save to the global leaderboard'}
+                {authUser
+                  ? `${activeDisplayName} · Saved to profile & leaderboard`
+                  : 'Sign in with Google to save to the global leaderboard'}
               </p>
             </div>
 
@@ -1125,6 +1181,15 @@ function AppContent() {
                   {runCorrectCount}/{runAnsweredCount}
                 </div>
               </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 bg-slate-950/70 border border-slate-800/80 rounded-xl px-3.5 py-2.5 text-xs font-mono-num">
+              <span className="text-slate-300">
+                High Score: <strong className="text-amber-300">{progress.highScore.toLocaleString()}</strong>
+              </span>
+              <span className="text-slate-300">
+                Total OST: <strong className="text-sky-300">{progress.totalCorrectOst}/{progress.totalAnsweredOst}</strong>
+              </span>
             </div>
 
             {!authUser && (
@@ -1210,7 +1275,7 @@ function AppContent() {
 
       {showLeaderboard && (
         <LeaderboardModal
-          currentUid={progress.uid}
+          currentUid={authUser?.uid ?? progress.uid}
           onClose={() => setShowLeaderboard(false)}
         />
       )}

@@ -195,7 +195,7 @@ service cloud.firestore {
     }
 
     match /leaderboard/{userId} {
-      allow get: if isValidId(userId) && existing().highScore >= 0;
+      allow get: if isValidId(userId) && (isOwner(userId) || existing().highScore >= 0);
       allow list: if existing().highScore >= 0 || existing().totalCorrectOst >= 0;
       allow create: if isValidId(userId)
         && isOwner(userId)

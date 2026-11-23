@@ -18,10 +18,11 @@ import {
   getCurrentWeekId,
   WEEKLY_CHALLENGES,
 } from '../data/weeklyChallenges';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { LeaderboardEntry, TopicId, UserProgress, WeeklyChallengeState } from '../types/game';
 
 const LOCAL_STORAGE_KEY = 'subway_ost_sprint_progress_v1';
+let pendingCloudSave: Promise<void> = Promise.resolve();
 
 export const DEFAULT_PROGRESS: UserProgress = {
   uid: null,
@@ -82,9 +83,31 @@ export function sanitizeWeeklyChallenge(value: unknown): WeeklyChallengeState {
   };
 }
 
-function sanitizeDisplayName(name: string | null | undefined): string {
-  const cleaned = (name ?? 'OST Runner').trim().replace(/\s+/g, ' ');
-  return (cleaned.length > 0 ? cleaned : 'OST Runner').slice(0, 60);
+export function extractFirstName(
+  displayName: string | null | undefined,
+  email?: string | null,
+): string {
+  const raw = (displayName ?? '').trim().replace(/\s+/g, ' ');
+  if (raw.length > 0 && raw !== 'Guest Runner' && raw !== 'OST Runner') {
+    if (raw.includes(',')) {
+      const afterComma = raw.split(',')[1]?.trim().split(/\s+/)[0];
+      if (afterComma) return afterComma.slice(0, 60);
+    }
+    const first = raw.split(/\s+/)[0];
+    if (first) return first.slice(0, 60);
+  }
+  const emailLocal = (email ?? '').split('@')[0]?.trim();
+  if (emailLocal) {
+    const firstPart = emailLocal.split(/[._-]+/)[0];
+    if (firstPart) {
+      return (firstPart.charAt(0).toUpperCase() + firstPart.slice(1)).slice(0, 60);
+    }
+  }
+  return 'Runner';
+}
+
+function sanitizeDisplayName(name: string | null | undefined, email?: string | null): string {
+  return extractFirstName(name, email);
 }
 
 function sanitizeTopicMap(input: Record<string, number> | undefined): Record<string, number> {
@@ -146,11 +169,16 @@ export function saveLocalProgress(progress: UserProgress): void {
 
 export async function syncUserOnSignIn(
   user: User,
-  guestProgress: UserProgress,
+  localProgress: UserProgress,
 ): Promise<UserProgress> {
   const userPath = `users/${user.uid}`;
   const userRef = doc(db, 'users', user.uid);
-  const displayName = sanitizeDisplayName(user.displayName);
+  const displayName = sanitizeDisplayName(user.displayName, user.email);
+  // Only merge local stats if they belong to a guest session or this same Google account
+  const mergeLocal = !localProgress.uid || localProgress.uid === user.uid;
+  const guestProgress: UserProgress = mergeLocal
+    ? localProgress
+    : { ...DEFAULT_PROGRESS, weeklyChallenge: createFreshWeeklyChallenge() };
 
   try {
     const snap = await getDoc(userRef);
@@ -318,16 +346,35 @@ function mergeTopicMaps(
   return out;
 }
 
-export async function saveCloudProgress(
+export function saveCloudProgress(
   progress: UserProgress,
-  _runScore = 0,
+  runScore = 0,
   runCoins = 0,
   alreadyExists = true,
 ): Promise<void> {
-  if (!progress.uid) return;
-  const userPath = `users/${progress.uid}`;
-  const userRef = doc(db, 'users', progress.uid);
+  const nextSave = pendingCloudSave
+    .catch(() => {})
+    .then(() => performSaveCloudProgress(progress, runScore, runCoins, alreadyExists));
+  pendingCloudSave = nextSave.catch(() => {});
+  return nextSave;
+}
 
+async function performSaveCloudProgress(
+  progress: UserProgress,
+  _runScore = 0,
+  runCoins = 0,
+  _alreadyExists = true,
+): Promise<void> {
+  const effectiveUid = progress.uid ?? auth.currentUser?.uid ?? null;
+  if (!effectiveUid) return;
+
+  const userPath = `users/${effectiveUid}`;
+  const userRef = doc(db, 'users', effectiveUid);
+
+  const safeName = sanitizeDisplayName(
+    auth.currentUser?.displayName ?? progress.displayName,
+    auth.currentUser?.email,
+  );
   const safeCorrect = sanitizeNonNegInt(progress.totalCorrectOst, 1000000);
   const safeAnswered = Math.max(
     safeCorrect,
@@ -335,47 +382,77 @@ export async function saveCloudProgress(
   );
   const safeBoard = (progress.selectedBoard || 'metro-amber').slice(0, 32);
   const safeTopic = (progress.selectedTopic || 'simplifying-expressions').slice(0, 48);
+  const normalizedProgress: UserProgress = {
+    ...progress,
+    uid: effectiveUid,
+    displayName: safeName,
+    totalCorrectOst: safeCorrect,
+    totalAnsweredOst: safeAnswered,
+    selectedBoard: safeBoard,
+    selectedTopic: safeTopic as TopicId,
+  };
+
+  let exists = false;
+  try {
+    const snap = await getDoc(userRef);
+    exists = snap.exists();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, userPath);
+  }
+
+  const updateFields = {
+    displayName: safeName,
+    highScore: sanitizeNonNegInt(normalizedProgress.highScore, 100000000),
+    totalCoins: sanitizeNonNegInt(normalizedProgress.totalCoins, 100000000),
+    totalRuns: sanitizeNonNegInt(normalizedProgress.totalRuns, 1000000),
+    totalCorrectOst: safeCorrect,
+    totalAnsweredOst: safeAnswered,
+    multiplierLevel: sanitizeLevel(normalizedProgress.multiplierLevel),
+    ostWordsCompleted: sanitizeNonNegInt(normalizedProgress.ostWordsCompleted, 1000000),
+    missionProgress: sanitizeMissionProgress(normalizedProgress.missionProgress),
+    weeklyChallenge: sanitizeWeeklyChallenge(normalizedProgress.weeklyChallenge),
+    selectedTopic: safeTopic,
+    selectedBoard: safeBoard,
+    unlockedBoards: sanitizeBoards(normalizedProgress.unlockedBoards, safeCorrect),
+    topicCorrectCounts: sanitizeTopicMap(normalizedProgress.topicCorrectCounts),
+    topicAnsweredCounts: sanitizeTopicMap(normalizedProgress.topicAnsweredCounts),
+    updatedAt: serverTimestamp(),
+  };
 
   try {
-    if (alreadyExists) {
-      await updateDoc(userRef, {
-        displayName: sanitizeDisplayName(progress.displayName),
-        highScore: sanitizeNonNegInt(progress.highScore, 100000000),
-        totalCoins: sanitizeNonNegInt(progress.totalCoins, 100000000),
-        totalRuns: sanitizeNonNegInt(progress.totalRuns, 1000000),
-        totalCorrectOst: safeCorrect,
-        totalAnsweredOst: safeAnswered,
-        multiplierLevel: sanitizeLevel(progress.multiplierLevel),
-        ostWordsCompleted: sanitizeNonNegInt(progress.ostWordsCompleted, 1000000),
-        missionProgress: sanitizeMissionProgress(progress.missionProgress),
-        weeklyChallenge: sanitizeWeeklyChallenge(progress.weeklyChallenge),
-        selectedTopic: safeTopic,
-        selectedBoard: safeBoard,
-        unlockedBoards: sanitizeBoards(progress.unlockedBoards, safeCorrect),
-        topicCorrectCounts: sanitizeTopicMap(progress.topicCorrectCounts),
-        topicAnsweredCounts: sanitizeTopicMap(progress.topicAnsweredCounts),
-        updatedAt: serverTimestamp(),
+    if (exists) {
+      await updateDoc(userRef, updateFields);
+    } else {
+      await setDoc(userRef, {
+        uid: effectiveUid,
+        ...updateFields,
+        createdAt: serverTimestamp(),
       });
     }
   } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, userPath);
+    handleFirestoreError(error, exists ? OperationType.UPDATE : OperationType.CREATE, userPath);
   }
 
-  await upsertLeaderboardEntry(progress, runCoins);
+  await upsertLeaderboardEntry(normalizedProgress, runCoins);
 }
 
 async function upsertLeaderboardEntry(
   progress: UserProgress,
   runCoins: number,
 ): Promise<void> {
-  if (!progress.uid) return;
-  const lbPath = `leaderboard/${progress.uid}`;
-  const lbRef = doc(db, 'leaderboard', progress.uid);
+  const effectiveUid = progress.uid ?? auth.currentUser?.uid ?? null;
+  if (!effectiveUid) return;
+  const lbPath = `leaderboard/${effectiveUid}`;
+  const lbRef = doc(db, 'leaderboard', effectiveUid);
 
   const safeCorrect = sanitizeNonNegInt(progress.totalCorrectOst, 1000000);
   const safeAnswered = Math.max(
     safeCorrect,
     sanitizeNonNegInt(progress.totalAnsweredOst, 1000000),
+  );
+  const safeName = sanitizeDisplayName(
+    auth.currentUser?.displayName ?? progress.displayName,
+    auth.currentUser?.email,
   );
 
   let existingBestCoins = 0;
@@ -390,9 +467,8 @@ async function upsertLeaderboardEntry(
     handleFirestoreError(error, OperationType.GET, lbPath);
   }
 
-  const payload = {
-    uid: progress.uid,
-    displayName: sanitizeDisplayName(progress.displayName),
+  const updatePayload = {
+    displayName: safeName,
     highScore: sanitizeNonNegInt(progress.highScore, 100000000),
     totalCorrectOst: safeCorrect,
     totalAnsweredOst: safeAnswered,
@@ -403,9 +479,12 @@ async function upsertLeaderboardEntry(
 
   try {
     if (exists) {
-      await updateDoc(lbRef, payload);
+      await updateDoc(lbRef, updatePayload);
     } else {
-      await setDoc(lbRef, payload);
+      await setDoc(lbRef, {
+        uid: effectiveUid,
+        ...updatePayload,
+      });
     }
   } catch (error) {
     handleFirestoreError(error, exists ? OperationType.UPDATE : OperationType.CREATE, lbPath);
@@ -415,6 +494,11 @@ async function upsertLeaderboardEntry(
 export async function fetchLeaderboard(
   sortBy: 'highScore' | 'totalCorrectOst',
 ): Promise<LeaderboardEntry[]> {
+  try {
+    await pendingCloudSave;
+  } catch {
+    // Ignore failed prior save and still fetch current leaderboard
+  }
   const path = 'leaderboard';
   try {
     const q = query(
@@ -428,7 +512,7 @@ export async function fetchLeaderboard(
       const data = d.data();
       return {
         uid: String(data.uid ?? d.id),
-        displayName: String(data.displayName ?? 'OST Runner'),
+        displayName: extractFirstName(String(data.displayName ?? 'Runner')),
         highScore: Number(data.highScore ?? 0),
         totalCorrectOst: Number(data.totalCorrectOst ?? 0),
         totalAnsweredOst: Number(data.totalAnsweredOst ?? 0),
